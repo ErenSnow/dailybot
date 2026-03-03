@@ -248,7 +248,131 @@ func getMessageContent(msg *larkim.Message) string {
 			return parsed.Text
 		}
 	}
+	if msgType == "post" {
+		return parsePostContent(content)
+	}
 	return content
+}
+
+// parsePostContent 解析飞书 post 格式的富文本内容
+func parsePostContent(content string) string {
+	var post struct {
+		Title string `json:"title"`
+		Content [][][]struct {
+			Tag   string `json:"tag"`
+			Text  string `json:"text"`
+			Title string `json:"title"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(content), &post); err != nil {
+		return content
+	}
+
+	var result strings.Builder
+
+	for _, row := range post.Content {
+		for _, item := range row {
+			switch item.Tag {
+			case "text":
+				if item.Text != "" {
+					result.WriteString(item.Text)
+				}
+			case "a":
+				if item.Text != "" {
+					result.WriteString(item.Text)
+				}
+			case "at":
+				if item.Text != "" {
+					result.WriteString(item.Text)
+				}
+			case "bold":
+				for _, sub := range item {
+					if sub.Text != "" {
+						result.WriteString(sub.Text)
+					}
+				}
+			case "italic":
+				for _, sub := range item {
+					if sub.Text != "" {
+						result.WriteString(sub.Text)
+					}
+				}
+			case "code":
+				if item.Text != "" {
+					result.WriteString("`" + item.Text + "`")
+				}
+			case "quote":
+				for _, sub := range item {
+					text := parsePostContentItem(sub)
+					if text != "" {
+						result.WriteString("> " + text + "\n")
+					}
+				}
+			case "header":
+				if item.Text != "" {
+					result.WriteString("## " + item.Text + "\n")
+				}
+			case "note":
+				for _, sub := range item {
+					text := parsePostContentItem(sub)
+					if text != "" {
+						result.WriteString("ℹ️ " + text + "\n")
+					}
+				}
+			case "bullet_list":
+				for _, sub := range item {
+					text := parsePostContentItem(sub)
+					if text != "" {
+						result.WriteString("• " + text + "\n")
+					}
+				}
+			case "number_list":
+				for i, sub := range item {
+					text := parsePostContentItem(sub)
+					if text != "" {
+						result.WriteString(fmt.Sprintf("%d. %s\n", i+1, text))
+					}
+				}
+			case "table":
+				// 简单处理表格，转为文本
+				for _, row := range item {
+					for _, cell := range row {
+						text := parsePostContentItem(cell)
+						if text != "" {
+							result.WriteString(text + " | ")
+						}
+					}
+					result.WriteString("\n")
+				}
+			}
+		}
+	}
+
+	return strings.TrimSpace(result.String())
+}
+
+// parsePostContentItem 递归解析 post 内容项
+func parsePostContentItem(item struct {
+	Tag   string `json:"tag"`
+	Text  string `json:"text"`
+	Title string `json:"title"`
+}) string {
+	switch item.Tag {
+	case "text":
+		return item.Text
+	case "a", "at":
+		return item.Text
+	case "bold", "italic", "code":
+		var result strings.Builder
+		for _, sub := range item {
+			if sub.Text != "" {
+				result.WriteString(sub.Text)
+			}
+		}
+		return result.String()
+	default:
+		return item.Text
+	}
 }
 
 // getAllMembers 获取群聊所有成员，返回 map[MemberId]Name
