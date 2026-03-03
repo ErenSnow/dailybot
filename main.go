@@ -133,9 +133,12 @@ func runDailyTask() {
 		currentTime := time.Now()
 		formattedTime := currentTime.Format(time.DateOnly)
 		combined.WriteString(fmt.Sprintf("%s 晨会记录：\n", formattedTime))
-		combined.WriteString(fmt.Sprintf("会议应到 %d 人，实到 ? 人  请假：?\n\n", len(members)))
+		combined.WriteString(fmt.Sprintf("会议应到 %d 人，实到 ? 人  请假：?\n\n", len(members)+1))
 
 		for _, msg := range resp.Data.Items {
+			if *msg.Deleted {
+				continue
+			}
 			senderName := getSenderName(msg, members)
 			content := getMessageContent(msg)
 			combined.WriteString(fmt.Sprintf("%s\n%s\n\n", senderName, content))
