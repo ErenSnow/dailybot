@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/larksuite/oapi-sdk-go/v3"
-	"github.com/larksuite/oapi-sdk-go/v3/core"
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	"github.com/robfig/cron/v3"
 )
@@ -256,123 +256,102 @@ func getMessageContent(msg *larkim.Message) string {
 
 // parsePostContent 解析飞书 post 格式的富文本内容
 func parsePostContent(content string) string {
-	var post struct {
-		Title string `json:"title"`
-		Content [][][]struct {
-			Tag   string `json:"tag"`
-			Text  string `json:"text"`
-			Title string `json:"title"`
-		} `json:"content"`
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &raw); err != nil {
+		return content
 	}
-	if err := json.Unmarshal([]byte(content), &post); err != nil {
+
+	// 常见 post 结构：{"title":"","content":[[{...}]]}
+	// 多语言结构：{"zh_cn":{"title":"","content":[[{...}]]}}
+	title, rows := extractPostRoot(raw)
+	if len(rows) == 0 {
 		return content
 	}
 
 	var result strings.Builder
+	if title != "" {
+		result.WriteString(title)
+		result.WriteString("\n")
+	}
 
-	for _, row := range post.Content {
-		for _, item := range row {
-			switch item.Tag {
-			case "text":
-				if item.Text != "" {
-					result.WriteString(item.Text)
-				}
-			case "a":
-				if item.Text != "" {
-					result.WriteString(item.Text)
-				}
-			case "at":
-				if item.Text != "" {
-					result.WriteString(item.Text)
-				}
-			case "bold":
-				for _, sub := range item {
-					if sub.Text != "" {
-						result.WriteString(sub.Text)
-					}
-				}
-			case "italic":
-				for _, sub := range item {
-					if sub.Text != "" {
-						result.WriteString(sub.Text)
-					}
-				}
-			case "code":
-				if item.Text != "" {
-					result.WriteString("`" + item.Text + "`")
-				}
-			case "quote":
-				for _, sub := range item {
-					text := parsePostContentItem(sub)
-					if text != "" {
-						result.WriteString("> " + text + "\n")
-					}
-				}
-			case "header":
-				if item.Text != "" {
-					result.WriteString("## " + item.Text + "\n")
-				}
-			case "note":
-				for _, sub := range item {
-					text := parsePostContentItem(sub)
-					if text != "" {
-						result.WriteString("ℹ️ " + text + "\n")
-					}
-				}
-			case "bullet_list":
-				for _, sub := range item {
-					text := parsePostContentItem(sub)
-					if text != "" {
-						result.WriteString("• " + text + "\n")
-					}
-				}
-			case "number_list":
-				for i, sub := range item {
-					text := parsePostContentItem(sub)
-					if text != "" {
-						result.WriteString(fmt.Sprintf("%d. %s\n", i+1, text))
-					}
-				}
-			case "table":
-				// 简单处理表格，转为文本
-				for _, row := range item {
-					for _, cell := range row {
-						text := parsePostContentItem(cell)
-						if text != "" {
-							result.WriteString(text + " | ")
-						}
-					}
-					result.WriteString("\n")
-				}
-			}
+	for _, row := range rows {
+		rowItems, ok := row.([]interface{})
+		if !ok {
+			continue
+		}
+
+		var line strings.Builder
+		for _, item := range rowItems {
+			line.WriteString(parsePostContentItem(item))
+		}
+
+		text := strings.TrimSpace(line.String())
+		if text != "" {
+			result.WriteString(text)
+			result.WriteString("\n")
 		}
 	}
 
-	return strings.TrimSpace(result.String())
+	parsed := strings.TrimSpace(result.String())
+	if parsed == "" {
+		return content
+	}
+	return parsed
+}
+
+func extractPostRoot(raw map[string]interface{}) (string, []interface{}) {
+	if rows, ok := raw["content"].([]interface{}); ok {
+		title, _ := raw["title"].(string)
+		return title, rows
+	}
+
+	if zh, ok := raw["zh_cn"].(map[string]interface{}); ok {
+		title, _ := zh["title"].(string)
+		if rows, ok := zh["content"].([]interface{}); ok {
+			return title, rows
+		}
+	}
+
+	return "", nil
 }
 
 // parsePostContentItem 递归解析 post 内容项
-func parsePostContentItem(item struct {
-	Tag   string `json:"tag"`
-	Text  string `json:"text"`
-	Title string `json:"title"`
-}) string {
-	switch item.Tag {
-	case "text":
-		return item.Text
-	case "a", "at":
-		return item.Text
-	case "bold", "italic", "code":
+func parsePostContentItem(item interface{}) string {
+	switch v := item.(type) {
+	case string:
+		return v
+	case []interface{}:
 		var result strings.Builder
-		for _, sub := range item {
-			if sub.Text != "" {
-				result.WriteString(sub.Text)
-			}
+		for _, sub := range v {
+			result.WriteString(parsePostContentItem(sub))
 		}
 		return result.String()
-	default:
-		return item.Text
+	case map[string]interface{}:
+		tag, _ := v["tag"].(string)
+		text, _ := v["text"].(string)
+
+		switch tag {
+		case "code":
+			if text != "" {
+				return "`" + text + "`"
+			}
+		case "img", "media":
+			if title, ok := v["title"].(string); ok && title != "" {
+				return title
+			}
+		}
+
+		if text != "" {
+			return text
+		}
+		if title, ok := v["title"].(string); ok && title != "" {
+			return title
+		}
+		if nested, ok := v["content"]; ok {
+			return parsePostContentItem(nested)
+		}
 	}
+	return ""
 }
 
 // getAllMembers 获取群聊所有成员，返回 map[MemberId]Name
